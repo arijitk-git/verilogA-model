@@ -1,0 +1,108 @@
+// VerilogA for veriloga model, VCSELmodel2_v4
+
+`include "constants.vams"
+`include "disciplines.vams"
+
+module VCSELmodel_v4(Anode, Cathode, Popt);
+
+inout Anode, Cathode;
+output Popt;
+electrical Anode, Cathode, Popt, popt_intr,n1,nL,n2,Junc;
+
+ground gnd;
+
+  	real Iv; //VCSEL current
+	real Rtemp = 1m; // intermediate resistance [Ohm]
+	real V_De;//thermally induced voltage error terms
+	real n_diode; // heterojunction diode ideality factor
+	real Is; //saturation current
+	real Rm; // DBR + contact resistances
+	real Ra; // active junction resistance
+	real Ca;// active junction capacitance
+	real Cp = 42f, Rp = 20; //pad parasitic
+	real Lp = 20p; //pad inductance
+	real ith0; // threshold current
+	real n_popt; // slope efficiency 
+	real P_V; // Converted optical power
+	real P_Ve; // thermally induced optical power error terms
+	real K,fr, gamma, gamma0 = 1.2e10; // optical resonance prameters
+	real Copt = 100f, Lopt, Ropt; // optical equivalent lumped elements
+
+	real pCa[2:0],pRa[2:0], pRm[1:0], pfr[2:0], verr[3:0], perr[2:0];
+	real T; // temperature in degC
+	real pole_thermal[0:1]={-1/1e-6, 0};//thermal time constant [s]
+
+	branch (Junc, Cathode) Rjunc, Cjunc;
+
+	analog initial begin
+		T = $temperature-273; 
+		n_diode = 3.81-3e-2*T+3e-4*pow(T,2)-1.03e-6*pow(T,3);
+		Is=1.758e-12+7e-9*exp(-582/T);
+		ith0 = 3.68e-04+7.86e-07*T+3.166e-8*pow(T,2);
+		n_popt = 0.589-6.3e-04*T-3.9e-06*pow(T,2);
+		K = (8.095e-3*T+2.621);
+
+		pCa[2] = 0.1n*(-2.95e-5*pow(T,3)+7.73e-3*pow(T,2)-0.36*T+3.87);
+		pCa[1] = 1p*(2.6e-5*pow(T,3)-4.628e-3*pow(T,2)+0.146*T+2.44);
+		pCa[0] = 10f*(1.28e-5*pow(T,3)-2e-3*pow(T,2)+0.17*T+6);
+
+		pRa[2] = (7.248e-04*pow(T,3)-0.28*pow(T,2)+38.45*T-4955.6);
+		pRa[1] = (-1.034e-07*pow(T,3)+2.17e-05*pow(T,2) -1.85e-03*T+0.134);
+		pRa[0] = (3.34e-07*pow(T,3)+3.368e-03*pow(T,2)-1.1*T+ 131.7);
+
+		pRm[1] = (1.279*T+585.6);
+		pRm[0] = (0.1434*T+ 26.747);
+
+		verr[3] = -6.74*pow(T,2) -1096.7*T + 123827; 
+		verr[2] = -7.25e-04*pow(T,3) +0.28*pow(T,2)+34*T-3254; 
+		verr[1] = -4.4e-04*pow(T,2)-0.406*T+18.4;
+		verr[0] = 1e-07*pow(T,3)-2e-05*pow(T,2)+1.85e-03*T-0.13; 
+
+		pfr[2] = (-7.784e6*pow(T,2)+4.35e9*T-1.788e12);
+		pfr[1] = (-7.9e5*pow(T,2)-1.259e9*T+4.293e11);
+		pfr[0] = 2.144e7*T-1.2596e9;
+
+		perr[2] = (18.79-1.558e-2*T-2.237e-3*pow(T,2));	
+		perr[1] = (-2826.7-20.7*T+0.23*pow(T,2));	
+		perr[0] = (51335.7+742*T-4.57*pow(T,2));	
+		
+	end
+
+   analog begin
+
+	I(Anode, n1) <+ V(Anode, n1)/Rtemp;
+	I(n1,n2) <+ Cp*ddt(V(n1,n2));
+	V(n2,Cathode)<+I(n1,n2)*Rp;
+	Iv = (I(Anode, n1) > ith0) ? I(Anode, n1) : ith0 +1n;
+
+	//To compute input parasitic
+	Ca = pCa[2]*pow(Iv,2)+pCa[1]*Iv+pCa[0];
+	Ra = pRa[2]*Iv+pRa[1]/Iv+pRa[0];////
+	Rm = pRm[1]*Iv+pRm[0];////
+
+	//To compute optical response parameters
+	fr = pfr[2]*abs(Iv-ith0)+ pfr[1]*sqrt(Iv-ith0)+pfr[0];	
+	gamma = K*pow(fr/1e5,2)+gamma0;
+	Lopt = 1/pow(2*`M_PI*fr,2)/Copt; 
+	Ropt = Lopt*gamma; 
+
+	//To compute thermally settled error in VCSEL voltage
+	V_De=laplace_np(verr[3]*pow(Iv,3)+verr[2]*pow(Iv,2)+verr[1]*Iv+verr[0],{1},pole_thermal);// low-pass filtering	
+
+	V(n1,nL) <+ Lp*ddt(I(n1,nL));
+	V(nL,Junc) <+ I(nL,Junc)*Rm;
+	I(Cjunc) <+ Ca*ddt(V(Cjunc));
+	V(Rjunc) <+ I(Rjunc)*Ra+n_diode*$vt(T+273)*$ln(I(Rjunc)/Is+1) + V_De;
+
+	//To compute thermally settled error in VCSEL optical power
+	P_Ve = laplace_np(perr[0]*pow(Iv,4)+perr[1]*pow(Iv,3)+perr[2]*pow(Iv,2),{1},pole_thermal);// low-pass filtering   
+
+	P_V = n_popt*(Iv-ith0); // Electro-optical power conversion
+	V(popt_intr,gnd) <+ (P_V + P_Ve > 0.02*Iv) ? P_V + P_Ve : 0.02*Iv; //To account for optical output below threshold
+
+	//VCSEL non linearity; Optical equivalent electrical lumped elements
+	V(Popt,gnd) <+ V(popt_intr,gnd) - Ropt*I(popt_intr,Popt) - Lopt*ddt(I(popt_intr,Popt));
+	I(popt_intr,Popt) <+ Copt*ddt(V(Popt,gnd));
+
+   end
+endmodule
