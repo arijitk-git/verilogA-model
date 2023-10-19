@@ -1,5 +1,6 @@
 // VerilogA model for VCSEL, Version 5.0
 // Created by Arijit Karmakar, IMEC-Ghent University
+// This work is supported in part by the European Commission through the Horizon Europe project `Sprinter' under grant agreement number 101070581.
 
 `include "constants.vams"
 `include "disciplines.vams"
